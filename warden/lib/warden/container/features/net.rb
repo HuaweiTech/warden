@@ -121,22 +121,24 @@ module Warden
           raise
         end
 
-        def _net_out(network, port)
+        def _net_out(network, port_range)
           sh File.join(container_path, "net.sh"), "out", :env => {
             "NETWORK" => network,
-            "PORT"    => port,
+            "PORTS"    => port_range,
           }
         end
 
         def do_net_out(request, response)
-          unless request.network || request.port
-            raise WardenError.new("Please specify network and/or port.")
+          unless request.network || request.port || request.port_range
+            raise WardenError.new("Please specify network, port, and/or port_range.")
           end
 
-          _net_out(request.network, request.port)
+          port_range = request.port_range || "#{request.port}"
+
+          _net_out(request.network, port_range)
 
           @resources["net_out"] ||= []
-          @resources["net_out"] << [request.network, request.port]
+          @resources["net_out"] << [request.network, port_range]
         end
 
         def acquire(opts = {})

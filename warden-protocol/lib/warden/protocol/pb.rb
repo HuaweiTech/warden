@@ -493,6 +493,7 @@ module Warden
       required :handle, :string, 1
       optional :network, :string, 2
       optional :port, :uint32, 3
+      optional :port_range, :string, 4
 
     end
 

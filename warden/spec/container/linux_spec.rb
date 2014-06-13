@@ -101,27 +101,27 @@ describe "linux", :platform => "linux", :needs_root => true do
       Signal.trap("TERM") { exit }
 
       Warden::Server.setup(
-        "server" => {
-          "unix_domain_path" => unix_domain_path,
-          "container_klass" => container_klass,
-          "container_rootfs_path" => container_rootfs_path,
-          "container_depot_path" => container_depot_path,
-          "container_grace_time" => 5,
-          "job_output_limit" => job_output_limit,
-          "pidfile" => server_pidfile,
-          "syslog_socket" => syslog_socket },
-        "network" => {
-          "pool_start_address" => @start_address,
-          "pool_size" => 64,
-          "mtu" => mtu,
-          "allow_networks" => allow_networks,
-          "deny_networks" => deny_networks },
-        "port" => {
-          "pool_start_port" => 64000,
-          "pool_size" => 1000 },
-        "logging" => {
-          "level" => "debug",
-          "file" => File.join(work_path, "warden.log") }
+          "server" => {
+              "unix_domain_path" => unix_domain_path,
+              "container_klass" => container_klass,
+              "container_rootfs_path" => container_rootfs_path,
+              "container_depot_path" => container_depot_path,
+              "container_grace_time" => 5,
+              "job_output_limit" => job_output_limit,
+              "pidfile" => server_pidfile,
+              "syslog_socket" => syslog_socket},
+          "network" => {
+              "pool_start_address" => @start_address,
+              "pool_size" => 64,
+              "mtu" => mtu,
+              "allow_networks" => allow_networks,
+              "deny_networks" => deny_networks},
+          "port" => {
+              "pool_start_port" => 64000,
+              "pool_size" => 1000},
+          "logging" => {
+              "level" => "debug",
+              "file" => File.join(work_path, "warden.log")}
       )
 
       Warden::Server.run!
@@ -336,7 +336,7 @@ describe "linux", :platform => "linux", :needs_root => true do
       @handle = client.create.handle
     end
 
-    let(:options) { { :handle => handle, :script => script } }
+    let(:options) { {:handle => handle, :script => script} }
 
     def run
       response = client.run(options)
@@ -471,6 +471,25 @@ describe "linux", :platform => "linux", :needs_root => true do
       $1.to_i > 0
     end
 
+    def verify_connectivity(server_container, client_container, port, protocol = :tcp)
+      # Listen for a connection in server_container
+      server_script = "echo ok | nc -l #{port}"
+      job_id = client.spawn(:handle => server_container[:handle],
+                            :script => server_script).job_id
+
+      # Try to connect to the server container
+      client_script = "nc -w1 #{' -u' if protocol == :udp} #{server_container[:ip]} #{port}"
+      response = run(client_container[:handle], client_script)
+
+      unless response.stdout.strip == "ok"
+        # Clean up
+        client.stop(:handle => server_container[:handle])
+        return false
+      end
+
+      true
+    end
+
     context "reachability" do
       # Allow traffic to the first two subnets
       let(:allow_networks) do
@@ -485,7 +504,7 @@ describe "linux", :platform => "linux", :needs_root => true do
       before do
         @containers = 3.times.map do
           handle = client.create.handle
-          { :handle => handle, :ip => client.info(:handle => handle).container_ip }
+          {:handle => handle, :ip => client.info(:handle => handle).container_ip}
         end
       end
 
@@ -506,14 +525,95 @@ describe "linux", :platform => "linux", :needs_root => true do
         [0, 1, 2].permutation(2) do |first, second|
           reachable?(@containers[first][:handle], @containers[second][:ip]).should be_false
         end
+        puts `iptables -L -v -n`
       end
 
-      it "allows traffic to networks after net_out" do
-        net_out(:handle => @containers[0][:handle], :network => @containers[2][:ip])
-        reachable?(@containers[0][:handle], @containers[2][:ip]).should be_true
-        net_out(:handle => @containers[2][:handle], :network => @containers[0][:ip])
-        reachable?(@containers[2][:handle], @containers[0][:ip]).should be_true
+      describe "tcp" do
+        it "disallows traffic to networks before net_out" do
+          expect(verify_connectivity(@containers[1], @containers[0], 2000)).to eq false
+        end
+
+        it "allows traffic to networks after net_out" do
+          net_out(:handle => @containers[0][:handle], :network => @containers[1][:ip], :port => 2000, :protocol => "tcp")
+          expect(verify_connectivity(@containers[1], @containers[0], 2000)).to eq true
+          expect(verify_connectivity(@containers[1], @containers[0], 2001)).to eq false
+        end
+
+        context "when port ranges are specified"
+          it "should allow access to all ports in the range" do
+            net_out(:handle => @containers[0][:handle], :network => @containers[1][:ip], :port_range => "2000:2002", :protocol => "tcp")
+            expect(verify_connectivity(@containers[1], @containers[0], 2000)).to eq true
+            expect(verify_connectivity(@containers[1], @containers[0], 2001)).to eq true
+            expect(verify_connectivity(@containers[1], @containers[0], 2002)).to eq true
+            expect(verify_connectivity(@containers[1], @containers[0], 1999)).to eq false
+          end
+
+          it "will raise an error if min > max" do
+            expect {
+              net_out(:handle => @containers[0][:handle], :network => @containers[1][:ip], :port_range => "2002:2000", :protocol => "tcp")
+            }.to raise_error
+          end
       end
+
+      # context "network" do
+        # before do
+        #   system "ip link add net1 type dummy"
+        #   system "ifconfig net1 10.20.30.1 netmask 255.255.255.0"
+        #   system "ifconfig net1 up"
+        #
+        #   system "ip link add net2 type dummy"
+        #   system "ifconfig net2 10.20.31.1 netmask 255.255.255.0"
+        #   system "ifconfig net2 up"
+        #
+        #   system "iptables -t nat -A warden-postrouting -s 10.20.30.0/23 -j SNAT --to-source 10.0.2.15"
+        #
+        #   system "(echo 'net1' | nc -l 10.20.30.1 2000) &"
+        #   system "(echo 'net2' | nc -l 10.20.31.1 2000) &"
+        # end
+        #
+        # after do
+        #   system "ifconfig net1 down"
+        #   system "ip link delete net1 type dummy"
+        #   system "ifconfig net2 down"
+        #   system "ip link delete net2 type dummy"
+        # end
+
+      #   it "connects to both subnets when the cidr includes them" do
+      #     net_out(:handle => @containers[0][:handle], :network => "10.20.30.0/23", :port => 2000, :protocol => "tcp")
+      #     client_script = "nc -w1 10.20.30.1 2000"
+      #     response = run(@containers[0][:handle], client_script)
+      #     puts '---- FILTER -----'
+      #     puts `iptables -L -v -n`
+      #     puts '---- NAT -----'
+      #     puts `iptables -L -v -n -t nat`
+      #     puts `ifconfig -a`
+      #     puts `route`
+      #     expect(response.stdout.strip).to eq("net1")
+      #
+      #     client_script = "nc -w1 10.20.31.1 2000"
+      #     response = run(@containers[0][:handle], client_script)
+      #     expect(response.stdout.strip).to eq("net2")
+      #   end
+      #
+      #   it "cannot connect to a subnet that is not included" do
+      #     net_out(:handle => @containers[0][:handle], :network => "10.20.30.0/24", :port => 2000, :protocol => "tcp")
+      #     client_script = "nc -w1 10.20.30.1 2000"
+      #     response = run(@containers[0][:handle], client_script)
+      #     expect(response.stdout.strip).to eq("net1")
+      #
+      #     client_script = "nc -w1 10.20.31.1 2000"
+      #     response = run(@containers[0][:handle], client_script)
+      #     expect(response.stdout.strip).to eq("")
+      #     p response.inspect
+      #   end
+      # end
+
+      # context "udp" do
+      #   it "allows traffic to networks after net_out" do
+      #     net_out(:handle => @containers[0][:handle], :network => @containers[1][:ip], :port => 2000, :protocol => "udp")
+      #     expect(verify_connectivity(@containers[1], @containers[0], 2000, :udp)).to eq true
+      #   end
+      # end
     end
 
     describe "check network and port fields" do

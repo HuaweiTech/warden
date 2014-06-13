@@ -107,8 +107,8 @@ case "${1}" in
     ;;
 
   "out")
-    if [ -z "${NETWORK:-}" ] && [ -z "${PORT:-}" ]; then
-      echo "Please specify NETWORK and/or PORT..." 1>&2
+    if [ -z "${NETWORK:-}" ] && [ -z "${PORTS:-}" ]; then
+      echo "Please specify NETWORK and/or PORTS..." 1>&2
       exit 1
     fi
 
@@ -118,10 +118,10 @@ case "${1}" in
       opts="${opts} --destination ${NETWORK}"
     fi
 
-    # Restrict protocol to tcp when port is specified
-    if [ -n "${PORT:-}" ]; then
+    # Restrict protocol to tcp when PORTS is specified
+    if [ -n "${PORTS:-}" ]; then
       opts="${opts} --protocol tcp"
-      opts="${opts} --destination-port ${PORT}"
+      opts="${opts} --destination-port ${PORTS}"
     fi
 
     iptables -I ${filter_instance_chain} 1 ${opts} --jump RETURN
